@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/wtifs/ddmc/config"
-	"github.com/wtifs/ddmc/service/log"
+	"github.com/wtifs/ddmc/utils/log"
 	"io/ioutil"
 	"net/http"
 )

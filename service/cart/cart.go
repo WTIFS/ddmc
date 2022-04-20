@@ -4,90 +4,96 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"github.com/robertkrimen/otto"
+	"github.com/wtifs/ddmc/utils"
+	"github.com/wtifs/ddmc/utils/log"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/wtifs/ddmc/config"
 	"github.com/wtifs/ddmc/constants"
 	"github.com/wtifs/ddmc/service/bark"
-	"github.com/wtifs/ddmc/service/log"
 )
 
-var cartClient = &http.Client{}
+type CartProduct struct {
+	ProductName string `json:"product_name"`
+}
 
-type GetMultipleReserveTimeResp struct {
-	Success bool   `json:"success"`
-	Code    int    `json:"code"`
-	Msg     string `json:"msg"`
-	Data    []struct {
-		Time []struct {
-			DateStr          string `json:"date_str"`
-			DateStrTimeStamp string `json:"date_str_time_stamp"`
-			Day              string `json:"day"`
-			Times            []struct {
-				Type      int    `json:"type"`
-				FullFlag  bool   `json:"fullFlag"`
-				SelectMsg string `json:"select_msg"`
-			} `json:"times"`
-		} `json:"time"`
+// 购物车响应结构体
+type CartIndexResp struct {
+	CommonResp
+	Data struct {
+		Product struct {
+			// 有库存的
+			Effective []struct {
+				Products []CartProduct `json:"products"`
+			} `json:"effective"`
+
+			// 无库存的
+			Invalid []struct {
+				Products []CartProduct `json:"products"`
+			} `json:"invalid"`
+		} `json:"product"`
 	} `json:"data"`
 }
 
-// 调用 结算 - 获取配送时间接口
-func GetMultiReserveTime(rawBody string) (GetMultipleReserveTimeResp, error) {
-	var res GetMultipleReserveTimeResp
+// js签名结果结构体
+type JsSign struct {
+	Nars string `json:"nars"`
+	Sesi string `json:"sesi"`
+}
 
-	queries, err := url.ParseQuery(rawBody)
-	if err != nil {
-		return res, err
+// 调用购物车库存接口
+func GetCart() (CartIndexResp, error) {
+	var res CartIndexResp
+
+	// 构造请求参数
+	queryMap := map[string]string{
+		"uid":           config.UID,
+		"longitude":     config.Longitude,
+		"latitude":      config.Latitude,
+		"station_id":    config.StationID,
+		"city_number":   config.CityID,
+		"api_version":   config.ApiVersion,
+		"app_version":   config.AppBuildVersion,
+		"channel":       config.Channel,
+		"app_client_id": config.AppClientID,
+		"s_id":          config.SID,
+		"openid":        config.DeviceID,
+		"time":          fmt.Sprintf("%d", time.Now().Unix()),
+		"device_token":  config.DeviceToken,
+		"is_load":       "1",
+		"ab_config":     config.ABConfig,
 	}
 
-	req, err := http.NewRequest(http.MethodPost, constants.UrlGetMultiReserveTime, strings.NewReader(rawBody))
-	if err != nil {
-		return res, err
-	}
+	// 构造请求
+	requestURL := constants.URLGetCart + "?" + utils.Map2URLValues(queryMap).Encode()
+	log.Debug("GET %s", requestURL)
+	req, _ := http.NewRequest(http.MethodGet, requestURL, nil)
+	setCommonRequestHeader(req)
 
-	req.Header.Add("Connection", "keep-alive")
-	req.Header.Add("Content-Length", "2215")
-	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Add("User-Agent", config.UserAgent)
-	req.Header.Add("Accept-Encoding", "gzip")
-	req.Header.Add("Referer", "https://servicewechat.com/wx1e113254eda17715/422/page-frame.html")
-	req.Header.Add("Cookie", config.Cookie)
-
-	req.Header.Add("ddmc-device-id", config.DeviceID)
-	req.Header.Add("ddmc-city-number", queries.Get("city_number"))
-	req.Header.Add("ddmc-build-version", queries.Get("build_version"))
-	req.Header.Add("ddmc-station-id", queries.Get("station_id"))
-	req.Header.Add("ddmc-channel", queries.Get("channel"))
-	req.Header.Add("ddmc-os-version", "[object Undefined]")
-	req.Header.Add("ddmc-app-client-id", queries.Get("app_client_id"))
-	req.Header.Add("ddmc-ip", "")
-	req.Header.Add("ddmc-longitude", queries.Get("longitude"))
-	req.Header.Add("ddmc-latitude", queries.Get("latitude"))
-	req.Header.Add("ddmc-api-version", queries.Get("api_version"))
-	req.Header.Add("ddmc-uid", queries.Get("uid"))
-	req.Header.Add("ddmc-time", fmt.Sprintf("%d", time.Now().Unix()))
-
-	log.Debug("%+v", req.Header)
-
+	// 调用购物车 API，发起请求
 	resp, err := cartClient.Do(req)
 	if err != nil {
-		return res, err
+		return res, fmt.Errorf("HTTP GET: %s", err.Error())
 	}
+
 	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return res, fmt.Errorf("invalid status code: %d", resp.StatusCode)
+	}
 
 	reader, err := gzip.NewReader(resp.Body)
 	if err != nil {
-		return res, err
+		return res, fmt.Errorf("gzip decode: %s", err.Error())
 	}
-
 	body, err := ioutil.ReadAll(reader)
+	//body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return res, err
+		return res, fmt.Errorf("read: %s", err.Error())
 	}
 
 	log.Debug("resp: %s", body)
@@ -95,13 +101,50 @@ func GetMultiReserveTime(rawBody string) (GetMultipleReserveTimeResp, error) {
 	return res, err
 }
 
-// 检查配送时间
-// 有配送时间表示有运力
-func CheckCart(rawBody string) {
-	ctx := "check_cart"
-	res, err := GetMultiReserveTime(rawBody)
+// 加密函数，经测试不加密也可以调通接口
+func addSign(req *http.Request, queryMap map[string]string) error {
+	// 读取js文件
+	filePath := utils.GetCurrentAbPath() + "/sign.js"
+	jsBytes, err := ioutil.ReadFile(filePath)
 	if err != nil {
-		log.Err("%s: failed to get_multi_reserve_time: %s", ctx, err.Error())
+		return fmt.Errorf("load sign.js: %s", err.Error())
+	}
+
+	log.Debug("%s", jsBytes)
+
+	vm := otto.New()
+	_, err = vm.Run(string(jsBytes))
+	if err != nil {
+		return fmt.Errorf("run otto: %s", err.Error())
+	}
+
+	// 调用js文件里的签名函数
+	signParams, _ := json.Marshal(queryMap)
+	signValue, err := vm.Call("sign", nil, string(signParams))
+	if err != nil {
+		return fmt.Errorf("otto call: %s", err.Error())
+	}
+	log.Debug("sign: %s", signValue)
+
+	// 解析签名结果
+	jsSign := JsSign{}
+	if err := json.Unmarshal([]byte(signValue.String()), &jsSign); err != nil {
+		return fmt.Errorf("parse sign: %s", err.Error())
+	}
+
+	// 将签名参数加到请求里
+	queryMap["nars"] = jsSign.Nars
+	queryMap["sesi"] = jsSign.Sesi
+
+	return nil
+}
+
+// 检查购物车库存
+func CheckCart() {
+	ctx := "check_cart"
+	res, err := GetCart()
+	if err != nil {
+		log.Err("%s: failed to get_cart: %s", ctx, err.Error())
 		return
 	}
 
@@ -110,20 +153,16 @@ func CheckCart(rawBody string) {
 		return
 	}
 
-	if len(res.Data) == 0 || len(res.Data[0].Time) == 0 {
-		log.Err("%s: empty list: %+v", ctx, res)
+	if len(res.Data.Product.Effective) == 0 || len(res.Data.Product.Effective[0].Products) == 0 {
+		log.Info("购物车所有商品均无库存")
 		return
 	}
 
-	isFull := true
+	availableProducts := res.Data.Product.Effective[0].Products
 
-	time0 := res.Data[0].Time[0]
-	for _, t := range time0.Times {
-		isFull = isFull && t.FullFlag
-		if !isFull {
-			bark.Bark("叮咚买菜有货了！最早可预约时间：%s", t.SelectMsg)
-			return
-		}
+	availableProductNames := make([]string, 0, len(availableProducts))
+	for _, p := range availableProducts {
+		availableProductNames = append(availableProductNames, p.ProductName)
 	}
-	log.Info("无可预约时间")
+	bark.Bark("以下商品有库存了：%s", strings.Join(availableProductNames, ", "))
 }
