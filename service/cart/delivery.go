@@ -1,6 +1,7 @@
 package cart
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"github.com/wtifs/ddmc/config"
@@ -68,13 +69,19 @@ func GetMultiReserveTime() (GetMultipleReserveTimeResp, error) {
 		return res, fmt.Errorf("invalid status code: %d", resp.StatusCode)
 	}
 
-	//reader, err := gzip.NewReader(resp.Body)
-	//if err != nil {
-	//	return res, fmt.Errorf("gzip decode: %s", err.Error())
-	//}
-	//body, err := ioutil.ReadAll(reader)
+	log.Debug("%+v", resp.Header)
 
-	body, err := ioutil.ReadAll(resp.Body)
+	reader := resp.Body
+
+	// 判断响应的编码
+	if resp.Header.Get("Content-Encoding") == "gzip" {
+		reader, err = gzip.NewReader(resp.Body)
+		if err != nil {
+			return res, fmt.Errorf("gzip decode: %s", err.Error())
+		}
+	}
+
+	body, err := ioutil.ReadAll(reader)
 	if err != nil {
 		return res, fmt.Errorf("read: %s", err.Error())
 	}

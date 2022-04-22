@@ -140,22 +140,22 @@ func addSign(req *http.Request, queryMap map[string]string) error {
 }
 
 // 检查购物车库存
-func CheckCart() {
+func CheckCart() bool {
 	ctx := "check_cart"
 	res, err := GetCart()
 	if err != nil {
 		log.Err("%s: failed to get_cart: %s", ctx, err.Error())
-		return
+		return false
 	}
 
 	if res.Code != 0 {
 		log.Err("%s: resp code 0: %+v", ctx, res)
-		return
+		return false
 	}
 
 	if len(res.Data.Product.Effective) == 0 || len(res.Data.Product.Effective[0].Products) == 0 {
 		log.Info("购物车所有商品均无库存")
-		return
+		return false
 	}
 
 	availableProducts := res.Data.Product.Effective[0].Products
@@ -165,4 +165,5 @@ func CheckCart() {
 		availableProductNames = append(availableProductNames, p.ProductName)
 	}
 	bark.Bark("以下商品有库存了：%s", strings.Join(availableProductNames, ", "))
+	return true
 }
