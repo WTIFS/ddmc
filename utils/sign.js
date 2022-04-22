@@ -1,4 +1,4 @@
-// js加密函数
+// js签名生成函数
 // source: https://github.com/JannsenYang/dingdong-helper/blob/843fe72cec/sign.js
 
 var md5 = (function () {

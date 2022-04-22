@@ -11,16 +11,16 @@ var (
 	ABConfig        = `{"key_onion":"D","key_cart_discount_price":"C"}`
 
 	// 小程序添加商品到购物车 - 结算，抓包 getMultiReserveTime 这个接口，获取以下参数
-	Cookie                     string
-	DeviceID                   string
-	Longitude                  string
-	Latitude                   string
-	UID                        string
-	StationID                  string
-	CityID                     string
-	GetMultiReserveTimeRawBody string
+	GetMultiReserveTimeRawBody string // raw_body
 
 	// 购物车接口
+	Cookie      string
+	DeviceID    string
+	Longitude   string
+	Latitude    string
+	UID         string
+	StationID   string
+	CityID      string
 	SID         string
 	DeviceToken string
 )
